@@ -14,6 +14,7 @@
 #include "check.h"
 
 UA_Server *server;
+UA_ServerConfig *config;
 UA_Boolean *running;
 UA_ServerNetworkLayer nl;
 pthread_t server_thread;
@@ -53,10 +54,7 @@ static void * serverloop(void *_) {
 static void setup(void) {
     running = UA_Boolean_new();
     *running = true;
-    UA_ServerConfig config = UA_ServerConfig_standard;
-    nl = UA_ServerNetworkLayerTCP(UA_ConnectionConfig_standard, 16664);
-    config.networkLayers = &nl;
-    config.networkLayersSize = 1;
+    config = UA_ServerConfig_new_default();
     server = UA_Server_new(config);
     UA_Server_run_startup(server);
     addVariable(16366);
@@ -69,11 +67,11 @@ static void teardown(void) {
     UA_Server_run_shutdown(server);
     UA_Boolean_delete(running);
     UA_Server_delete(server);
-    nl.deleteMembers(&nl);
+    UA_ServerConfig_delete(config);
 }
 
 START_TEST(Client_connect) {
-    UA_Client *client = UA_Client_new(UA_ClientConfig_standard);
+    UA_Client *client = UA_Client_new(UA_ClientConfig_default);
     UA_StatusCode retval = UA_Client_connect(client, "opc.tcp://localhost:16664");
 
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
@@ -84,7 +82,7 @@ START_TEST(Client_connect) {
 END_TEST
 
 START_TEST(Client_read) {
-    UA_Client *client = UA_Client_new(UA_ClientConfig_standard);
+    UA_Client *client = UA_Client_new(UA_ClientConfig_default);
     UA_StatusCode retval = UA_Client_connect(client, "opc.tcp://localhost:16664");
     ck_assert_uint_eq(retval, UA_STATUSCODE_GOOD);
 

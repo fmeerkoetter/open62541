@@ -100,7 +100,7 @@ typedef struct {
  *
  * Server Lifecycle
  * ---------------- */
-UA_Server UA_EXPORT * UA_Server_new(const UA_ServerConfig config);
+UA_Server UA_EXPORT * UA_Server_new(const UA_ServerConfig *config);
 void UA_EXPORT UA_Server_delete(UA_Server *server);
 
 /* Runs the main loop of the server. In each iteration, this calls into the

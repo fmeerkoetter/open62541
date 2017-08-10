@@ -24,7 +24,7 @@ nodeIter(UA_NodeId childId, UA_Boolean isInverse, UA_NodeId referenceTypeId, voi
 }
 
 int main(int argc, char *argv[]) {
-    UA_Client *client = UA_Client_new(UA_ClientConfig_standard);
+    UA_Client *client = UA_Client_new(UA_ClientConfig_default);
 
     /* Listing endpoints */
     UA_EndpointDescription* endpointArray = NULL;
@@ -94,7 +94,7 @@ int main(int argc, char *argv[]) {
 #ifdef UA_ENABLE_SUBSCRIPTIONS
     /* Create a subscription */
     UA_UInt32 subId = 0;
-    UA_Client_Subscriptions_new(client, UA_SubscriptionSettings_standard, &subId);
+    UA_Client_Subscriptions_new(client, UA_SubscriptionSettings_default, &subId);
     if(subId)
         printf("Create subscription succeeded, id %u\n", subId);
     /* Add a MonitoredItem */

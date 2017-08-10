@@ -5,12 +5,17 @@
 #include "ua_log_stdout.h"
 #include "ua_network_tcp.h"
 #include "ua_accesscontrol_default.h"
+#include "ua_types_generated.h"
+#include "ua_types.h"
 
-/*******************************/
-/* Default Connection Settings */
-/*******************************/
+#define ANONYMOUS_POLICY "open62541-anonymous-policy"
+#define USERNAME_POLICY "open62541-username-policy"
 
-const UA_EXPORT UA_ConnectionConfig UA_ConnectionConfig_standard = {
+ /*******************************/
+ /* Default Connection Settings */
+ /*******************************/
+
+const UA_ConnectionConfig UA_ConnectionConfig_default = {
     0, /* .protocolVersion */
     65535, /* .sendBufferSize, 64k per chunk */
     65535, /* .recvBufferSize, 64k per chunk */
@@ -34,86 +39,211 @@ const UA_EXPORT UA_ConnectionConfig UA_ConnectionConfig_standard = {
 #define VERSION(MAJOR, MINOR, PATCH, LABEL) \
     STRINGIFY(MAJOR) "." STRINGIFY(MINOR) "." STRINGIFY(PATCH) LABEL
 
-const UA_EXPORT UA_ServerConfig UA_ServerConfig_standard = {
-    1, /* .nThreads */
-    UA_Log_Stdout, /* .logger */
+static UA_StatusCode
+createSecurityPolicyNoneEndpoint(UA_ServerConfig *conf, UA_Endpoint *endpoint,
+                                 const UA_ByteString *cert) {
+    UA_EndpointDescription_init(&endpoint->endpointDescription);
+
+    endpoint->securityPolicy = NULL;
+    endpoint->endpointDescription.securityMode = UA_MESSAGESECURITYMODE_NONE;
+    endpoint->endpointDescription.securityPolicyUri =
+        UA_STRING_ALLOC("http://opcfoundation.org/UA/SecurityPolicy#None");
+    endpoint->endpointDescription.transportProfileUri =
+        UA_STRING_ALLOC("http://opcfoundation.org/UA-Profile/Transport/uatcp-uasc-uabinary");
+
+    /* enable anonymous and username/password */
+    size_t policies = 2;
+    endpoint->endpointDescription.userIdentityTokens = (UA_UserTokenPolicy*)
+        UA_Array_new(policies, &UA_TYPES[UA_TYPES_USERTOKENPOLICY]);
+    if(!endpoint->endpointDescription.userIdentityTokens)
+        return UA_STATUSCODE_BADOUTOFMEMORY;
+    endpoint->endpointDescription.userIdentityTokensSize = policies;
+
+    endpoint->endpointDescription.userIdentityTokens[0].tokenType =
+        UA_USERTOKENTYPE_ANONYMOUS;
+    endpoint->endpointDescription.userIdentityTokens[0].policyId =
+        UA_STRING_ALLOC(ANONYMOUS_POLICY);
+
+    endpoint->endpointDescription.userIdentityTokens[1].tokenType =
+        UA_USERTOKENTYPE_USERNAME;
+    endpoint->endpointDescription.userIdentityTokens[1].policyId =
+        UA_STRING_ALLOC(USERNAME_POLICY);
+
+    if(cert)
+        UA_String_copy(cert, &endpoint->endpointDescription.serverCertificate);
+
+    UA_ApplicationDescription_copy(&conf->applicationDescription,
+                                   &endpoint->endpointDescription.server);
+
+    return UA_STATUSCODE_GOOD;
+}
+
+UA_ServerConfig *
+UA_ServerConfig_new_minimal(UA_UInt16 portNumber,
+                            const UA_ByteString *certificate) {
+    UA_ServerConfig *conf = (UA_ServerConfig*)UA_malloc(sizeof(UA_ServerConfig));
+    if(!conf)
+        return NULL;
+
+    /* --> Start setting the default static config <-- */
+
+    memset(conf, 0, sizeof(UA_ServerConfig));
+    conf->nThreads = 1;
+    conf->logger = UA_Log_Stdout;
 
     /* Server Description */
-    {UA_STRING_STATIC(PRODUCT_URI),
-     UA_STRING_STATIC(MANUFACTURER_NAME),
-     UA_STRING_STATIC(PRODUCT_NAME),
-     UA_STRING_STATIC(VERSION(UA_OPEN62541_VER_MAJOR, UA_OPEN62541_VER_MINOR,
-                              UA_OPEN62541_VER_PATCH, UA_OPEN62541_VER_LABEL)),
-     UA_STRING_STATIC(__DATE__ " " __TIME__), 0 }, /* .buildInfo */
-     
-    {UA_STRING_STATIC(APPLICATION_URI),
-     UA_STRING_STATIC(PRODUCT_URI),
-     {UA_STRING_STATIC("en"),UA_STRING_STATIC(APPLICATION_NAME) },
-      UA_APPLICATIONTYPE_SERVER,
-      UA_STRING_STATIC_NULL,
-      UA_STRING_STATIC_NULL,
-      0, NULL }, /* .applicationDescription */
-    UA_STRING_STATIC_NULL, /* .serverCertificate */
+    conf->buildInfo = (UA_BuildInfo) {
+        UA_STRING_STATIC(PRODUCT_URI),
+        UA_STRING_STATIC(MANUFACTURER_NAME),
+        UA_STRING_STATIC(PRODUCT_NAME),
+        UA_STRING_STATIC(VERSION(
+                UA_OPEN62541_VER_MAJOR,
+                UA_OPEN62541_VER_MINOR,
+                UA_OPEN62541_VER_PATCH,
+                UA_OPEN62541_VER_LABEL)),
+        UA_STRING_STATIC(__DATE__ " " __TIME__),
+        0
+    };
+
+    conf->applicationDescription = (UA_ApplicationDescription) {
+        UA_STRING_STATIC(APPLICATION_URI),
+        UA_STRING_STATIC(PRODUCT_URI), {
+            UA_STRING_STATIC("en"),
+            UA_STRING_STATIC(APPLICATION_NAME)
+        },
+        UA_APPLICATIONTYPE_SERVER,
+        UA_STRING_STATIC_NULL,
+        UA_STRING_STATIC_NULL,
+        0, NULL
+    };
+
 #ifdef UA_ENABLE_DISCOVERY
-    UA_STRING_STATIC_NULL, /* mdnsServerName */
-    0, /* serverCapabilitiesSize */
-    NULL, /* serverCapabilities */
+    conf->mdnsServerName = (UA_String){0, NULL};
+    conf->serverCapabilitiesSize = 0;
+    conf->serverCapabilities = NULL;
 #endif
 
     /* Custom DataTypes */
-    0, /* .customDataTypesSize */
-    NULL, /* .customDataTypes */
+    conf->customDataTypesSize = 0;
+    conf->customDataTypes = NULL;
 
     /* Networking */
-    0, /* .networkLayersSize */
-    NULL, /* .networkLayers */
+    conf->networkLayersSize = 0;
+    conf->networkLayers = NULL;
+
+    /* Endpoints */
+    conf->endpoints = (UA_Endpoints){0, NULL};
 
     /* Access Control */
-    {true, true,
-     activateSession_default, closeSession_default,
-     getUserRightsMask_default, getUserAccessLevel_default,
-     getUserExecutable_default, getUserExecutableOnObject_default,
-     allowAddNode_default, allowAddReference_default,
-     allowDeleteNode_default, allowDeleteReference_default},
+    conf->accessControl = (UA_AccessControl) {
+        true, true,
+        activateSession_default,
+        closeSession_default,
+        getUserRightsMask_default,
+        getUserAccessLevel_default,
+        getUserExecutable_default,
+        getUserExecutableOnObject_default,
+        allowAddNode_default,
+        allowAddReference_default,
+        allowDeleteNode_default,
+        allowDeleteReference_default };
 
     /* Limits for SecureChannels */
-    40, /* .maxSecureChannels */
-    10 * 60 * 1000, /* .maxSecurityTokenLifetime, 10 minutes */
+    conf->maxSecureChannels = 40;
+    conf->maxSecurityTokenLifetime = 10 * 60 * 1000; /* 10 minutes */
 
     /* Limits for Sessions */
-    100, /* .maxSessions */
-    60.0 * 60.0 * 1000.0, /* .maxSessionTimeout, 1h */
+    conf->maxSessions = 100;
+    conf->maxSessionTimeout = 60.0 * 60.0 * 1000.0; /* 1h */
 
     /* Limits for Subscriptions */
-    {100.0,3600.0 * 1000.0 }, /* .publishingIntervalLimits */
-    {3, 15000 }, /* .lifeTimeCountLimits */
-    {1,100}, /* .keepAliveCountLimits */
-    1000, /* .maxNotificationsPerPublish */
-    0, /* .maxRetransmissionQueueSize, unlimited */
+    conf->publishingIntervalLimits = (UA_DoubleRange){100.0, 3600.0 * 1000.0};
+    conf->lifeTimeCountLimits = (UA_UInt32Range){3, 15000};
+    conf->keepAliveCountLimits = (UA_UInt32Range){1, 100};
+    conf->maxNotificationsPerPublish = 1000;
+    conf->maxRetransmissionQueueSize = 0; /* unlimited */
 
     /* Limits for MonitoredItems */
-    {50.0, 24.0 * 3600.0 * 1000.0 }, /* .samplingIntervalLimits */
-    {1,100} /* .queueSizeLimits */
+    conf->samplingIntervalLimits = (UA_DoubleRange){50.0, 24.0 * 3600.0 * 1000.0};
+    conf->queueSizeLimits = (UA_UInt32Range){1, 100};
 
 #ifdef UA_ENABLE_DISCOVERY
-    , 60*60 /* .discoveryCleanupTimeout */
+    conf->discoveryCleanupTimeout = 60 * 60;
 #endif
-};
+
+    /* --> Finish setting the default static config <-- */
+
+    /* Add a network layer */
+    conf->networkLayers = (UA_ServerNetworkLayer*)
+        UA_malloc(sizeof(UA_ServerNetworkLayer));
+    if(!conf->networkLayers) {
+        UA_free(conf);
+        return NULL;
+    }
+    conf->networkLayers[0] =
+        UA_ServerNetworkLayerTCP(UA_ConnectionConfig_default, portNumber);
+    conf->networkLayersSize = 1;
+
+    /* Allocate the endpoint */
+    conf->endpoints.endpoints = (UA_Endpoint*)UA_malloc(sizeof(UA_Endpoint));
+    if(!conf->endpoints.endpoints) {
+        conf->networkLayers[0].deleteMembers(&conf->networkLayers[0]);
+        UA_free(conf->networkLayers);
+        UA_free(conf);
+        return NULL;
+    }
+    conf->endpoints.count = 1;
+
+    /* Populate the endpoint */
+    UA_StatusCode retval =
+        createSecurityPolicyNoneEndpoint(conf, &conf->endpoints.endpoints[0],
+                                         certificate);
+    if(retval != UA_STATUSCODE_GOOD) {
+        conf->networkLayers[0].deleteMembers(&conf->networkLayers[0]);
+        UA_free(conf->networkLayers);
+        UA_free(conf->endpoints.endpoints);
+        UA_free(conf);
+        return NULL;
+    }
+
+    return conf;
+}
+
+void
+UA_ServerConfig_delete(UA_ServerConfig *config) {
+    if(!config)
+        return;
+
+    UA_BuildInfo_deleteMembers(&config->buildInfo);
+    UA_ApplicationDescription_deleteMembers(&config->applicationDescription);
+
+    for(size_t i = 0; i < config->endpoints.count; ++i) {
+        UA_EndpointDescription_deleteMembers(&config->endpoints.endpoints[i].endpointDescription);
+    }
+
+    for(size_t i = 0; i < config->networkLayersSize; ++i) {
+        config->networkLayers[i].deleteMembers(&config->networkLayers[i]);
+    }
+
+    UA_free(config->endpoints.endpoints);
+    UA_free(config->networkLayers);
+    UA_free(config);
+}
 
 /***************************/
 /* Default Client Settings */
 /***************************/
 
-const UA_EXPORT UA_ClientConfig UA_ClientConfig_standard = {
+const UA_ClientConfig UA_ClientConfig_default = {
     5000, /* .timeout, 5 seconds */
     10 * 60 * 1000, /* .secureChannelLifeTime, 10 minutes */
     UA_Log_Stdout, /* .logger */
     /* .localConnectionConfig */
     {0, /* .protocolVersion */
-     65535, /* .sendBufferSize, 64k per chunk */
-     65535, /* .recvBufferSize, 64k per chunk */
-     0, /* .maxMessageSize, 0 -> unlimited */
-     0 }, /* .maxChunkCount, 0 -> unlimited */
+        65535, /* .sendBufferSize, 64k per chunk */
+        65535, /* .recvBufferSize, 64k per chunk */
+        0, /* .maxMessageSize, 0 -> unlimited */
+        0}, /* .maxChunkCount, 0 -> unlimited */
     UA_ClientConnectionTCP, /* .connectionFunc */
 
     0, /* .customDataTypesSize */
@@ -126,7 +256,7 @@ const UA_EXPORT UA_ClientConfig UA_ClientConfig_standard = {
 
 #ifdef UA_ENABLE_SUBSCRIPTIONS
 
-const UA_SubscriptionSettings UA_SubscriptionSettings_standard = {
+const UA_SubscriptionSettings UA_SubscriptionSettings_default = {
     500.0, /* .requestedPublishingInterval */
     10000, /* .requestedLifetimeCount */
     1, /* .requestedMaxKeepAliveCount */
